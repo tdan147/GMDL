@@ -72,3 +72,4 @@ def ex6():
                                    F(y1_row, y2_row, temp) * F(y2_row, y3_row, temp)
     print(z_temp)
 
+
