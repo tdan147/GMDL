@@ -108,9 +108,9 @@ def ex8():
 
 
 def calc_expectation(images, entry1, entry2):
-    X_entry1 = np.asarray([images[i][entry1-1][entry1-1] for i in range(10000)])
-    X_entry2 = np.asarray([images[i][entry2-1][entry2-1] for i in range(10000)])
+    X_entry1 = np.asarray([images[i][entry1-1][entry1-1] for i in range(len(images))])
+    X_entry2 = np.asarray([images[i][entry2-1][entry2-1] for i in range(len(images))])
     return X_entry1 @ X_entry2 / 10000
 
-ex8()
 
+ex8()
