@@ -23,8 +23,8 @@ def sample_gibbs(latice_length, temp, num_of_sweeps):
 
 def sweep(latice_length, padded_sample, temp):
     old_padded_sample = copy(padded_sample)
-    for i in range(1,latice_length):
-        for j in range(1, latice_length):
+    for i in range(1,latice_length+1):
+        for j in range(1, latice_length+1):
             prob = calc_prob(old_padded_sample, i, j, temp)
             padded_sample[i][j] = np.random.choice([-1, 1], p=prob)
     return padded_sample
@@ -32,10 +32,10 @@ def sweep(latice_length, padded_sample, temp):
 
 def calc_prob(sample, i, j, temp):
     sum_neigh = calc_sum_neigh(sample, i, j)
-    pos_prob = np.exp(1/temp * sum_neigh)
-    neg_prob = np.exp(-1/temp * sum_neigh)
+    pos_prob = np.exp((1/temp) * sum_neigh)
+    neg_prob = np.exp((-1/temp) * sum_neigh)
     z_temp = pos_prob + neg_prob
-    return [pos_prob / z_temp, neg_prob / z_temp]
+    return [neg_prob / z_temp, pos_prob / z_temp]
 
 
 def calc_sum_neigh(sample, i, j):
@@ -48,7 +48,7 @@ def main():
         samples = independent_samples(8, temp, 10000, 25)
         expectations_1_2 = calc_expectation(samples, 1, 2)
         expectations_1_8 = calc_expectation(samples, 1, 8)
-        print(f'temp= {temp}')
+        print(f'temp = {temp}')
         print(f'method1: empirical expectation for entries 1,2 is: {expectations_1_2}')
         print(f'method1: empirical expectation for entries 1,8 is: {expectations_1_8}')
         expectations_1_2, expectations_1_8 = ergodicity(8, temp, 25000, 100)
@@ -57,7 +57,6 @@ def main():
 
 
 
-main()
 
 
 def ergodicity(latice_length, temp, num_of_sweeps, burnin):
@@ -70,3 +69,5 @@ def ergodicity(latice_length, temp, num_of_sweeps, burnin):
         x_1_2 = (i * x_1_2 + padded_sample[1][1] * padded_sample[2][2]) / (i + 1)
         x_1_8 = (i * x_1_8 + padded_sample[1][1] * padded_sample[8][8]) / (i + 1)
     return x_1_2, x_1_8
+
+main()

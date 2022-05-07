@@ -61,15 +61,15 @@ def sample_images(p, latice_length):
     image = np.asarray(list(map(lambda y: y2row(y), y)))
     return image
 
-def plot(images, temps, latice_length):
+def plot(images):
     fig, axs = plt.subplots(3, 10, figsize=(20,8))
-    grid = plt.GridSpec(3, 10)
+    temp_title = ["temp=1", "temp=1.5", "temp=2"]
     for i in range(3):
         for j in range(10):
+            if j == 0:
+                axs[i, j].set_ylabel(temp_title[i])
             axs[i, j].imshow(images[i][j], interpolation='None', vmin=-1, vmax=1, cmap="gray")
             axs[i, j].set_xticks([]), axs[i, j].set_yticks([])
-        create_subtitle(fig, grid[i, ::], f'temp={temps[i]}')
-
     plt.show()
 
 def create_subtitle(fig: plt.Figure, grid: SubplotSpec, title: str):
@@ -90,7 +90,7 @@ def ex7():
         p = calc_p(T, latice_length, temp)
         temp_images = [sample_images(p, latice_length) for i in range(10)]
         images.append(temp_images)
-    plot(images, temps, latice_length)
+    plot(images)
 
 
 def ex8():
@@ -113,4 +113,4 @@ def calc_expectation(images, entry1, entry2):
     return X_entry1 @ X_entry2 / 10000
 
 
-ex8()
+# ex8()
