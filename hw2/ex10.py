@@ -19,17 +19,20 @@ def ex10():
         icm_sample = sample_gibbs_posterior(latice_length, temp, sweeps, y, sweep_icm)
         mle_sample = np.sign(y)
         images.append([sample, y, posterior_sample, icm_sample, mle_sample])
-    fig, axs = plt.subplots(3, 5, figsize=(20, 8))
+    fig, axs = plt.subplots(3, 5)
+    # fig, axs = plt.subplots(3, 5, figsize=(20, 8))
     for i in range(3):
+        for axe in axs[i]:
+            axe.axis('off')
         for j in range(5):
             if i == 0:
                 axs[i, j].title.set_text(images_titles[j])
             if j == 0:
                 axs[i, j].set_ylabel(temp_title[i])
             if j == 1:
-                axs[i, j].imshow(images[i][j], interpolation='None', cmap="gray")
+                axs[i, j].imshow(images[i][j], interpolation='None', cmap='gray')
             else:
-                axs[i, j].imshow(images[i][j], interpolation='None', vmin=-1, vmax=1, cmap="gray")
+                axs[i, j].imshow(images[i][j], interpolation='None', cmap='gray')
             axs[i, j].set_xticks([]), axs[i, j].set_yticks([])
 
     plt.show()
@@ -46,7 +49,7 @@ def calc_prob_posterior(sample, i, j, temp, y):
 
 
 def sweep(latice_length, padded_sample, temp, y):
-    old_padded_sample = copy(padded_sample)
+    old_padded_sample = padded_sample
     for i in range(1,latice_length+1):
         for j in range(1, latice_length+1):
             prob = calc_prob_posterior(old_padded_sample, i, j, temp, y)
@@ -55,10 +58,11 @@ def sweep(latice_length, padded_sample, temp, y):
 
 
 def sweep_icm(latice_length, padded_sample, temp, y):
-    old_padded_sample = copy(padded_sample)
+    old_padded_sample = padded_sample
+    padded_y = np.pad(y, ((1, 1), (1, 1)), 'constant')
     for i in range(1,latice_length+1):
         for j in range(1, latice_length+1):
-            prob = calc_prob_posterior(old_padded_sample, i, j, temp, y)
+            prob = calc_prob_posterior(old_padded_sample, i, j, temp, padded_y)
             padded_sample[i][j] = np.argmax(prob) * 2 - 1
     return padded_sample
 
@@ -66,18 +70,19 @@ def sweep_icm(latice_length, padded_sample, temp, y):
 def sample_gibbs_posterior(latice_length, temp, num_of_sweeps, y, sweep_func):
     sample = np.random.randint(0,2, (latice_length,latice_length))*2-1
     padded_sample = np.pad(sample, ((1,1),(1,1)), 'constant')
+    padded_y = np.pad(y, ((1,1),(1,1)), 'constant')
     for i in range(num_of_sweeps):
-        padded_sample = sweep_func(latice_length, padded_sample, temp, y)
+        padded_sample = sweep_func(latice_length, padded_sample, temp, padded_y)
     return padded_sample[1:-1, 1:-1]
 
 
-def independent_samples_posterior(latice_length, temp, num_of_samples, num_of_sweeps, y):
-    samples = []
-    for i in range(num_of_samples):
-        if i % 100 == 0:
-            print(f'sample number: {i}')
-        samples.append(sample_gibbs_posterior(latice_length, temp, num_of_sweeps, y))
-    return samples
+# def independent_samples_posterior(latice_length, temp, num_of_samples, num_of_sweeps, y):
+#     samples = []
+#     for i in range(num_of_samples):
+#         if i % 100 == 0:
+#             print(f'sample number: {i}')
+#         samples.append(sample_gibbs_posterior(latice_length, temp, num_of_sweeps, y))
+#     return samples
 
 
-# ex10()
+ex10()

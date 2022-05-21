@@ -22,7 +22,7 @@ def sample_gibbs(latice_length, temp, num_of_sweeps):
 
 
 def sweep(latice_length, padded_sample, temp):
-    old_padded_sample = copy(padded_sample)
+    old_padded_sample = padded_sample
     for i in range(1,latice_length+1):
         for j in range(1, latice_length+1):
             prob = calc_prob(old_padded_sample, i, j, temp)
@@ -70,4 +70,4 @@ def ergodicity(latice_length, temp, num_of_sweeps, burnin):
         x_1_8 = (i * x_1_8 + padded_sample[1][1] * padded_sample[8][8]) / (i + 1)
     return x_1_2, x_1_8
 
-main()
+# main()
