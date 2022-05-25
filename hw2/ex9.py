@@ -1,5 +1,4 @@
 import numpy as np
-from copy import copy
 from ex7 import calc_expectation
 
 
@@ -70,4 +69,4 @@ def ergodicity(latice_length, temp, num_of_sweeps, burnin):
         x_1_8 = (i * x_1_8 + padded_sample[1][1] * padded_sample[8][8]) / (i + 1)
     return x_1_2, x_1_8
 
-# main()
+main()

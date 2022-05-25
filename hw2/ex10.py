@@ -22,8 +22,8 @@ def ex10():
     fig, axs = plt.subplots(3, 5)
     # fig, axs = plt.subplots(3, 5, figsize=(20, 8))
     for i in range(3):
-        for axe in axs[i]:
-            axe.axis('off')
+        # for axe in axs[i]:
+        #     axe.axis('off')
         for j in range(5):
             if i == 0:
                 axs[i, j].title.set_text(images_titles[j])
@@ -85,4 +85,4 @@ def sample_gibbs_posterior(latice_length, temp, num_of_sweeps, y, sweep_func):
 #     return samples
 
 
-ex10()
+# ex10()
