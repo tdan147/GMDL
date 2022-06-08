@@ -38,11 +38,14 @@ p_L_G = np.asarray([[0.1, 0.9], [0.4, 0.6], [0.99, 0.01]])
 
 f3_G_msg = p_L_G.sum(axis=1)
 f1_G = [0, 0, 0]
+f1_D = [0, 0]
+f2_I = p_S_I.sum(axis=1)
+I_f1 = f2_I
+f1_I = [0.0, 0.0]
 indexes = [[0, 1], [2, 3]]
 
 def marginal_s():
     G_f2 = f3_G_msg
-    f1_I = [0.0, 0.0]
     for i in range(2):
         for j in range(3):
             f1_I[0] += p_I[0] * p_D[i] * p_G_D_I[0:2][i][j] * G_f2[j]
@@ -55,8 +58,7 @@ def marginal_s():
     return f2_S
 
 def marginal_l():
-    f2_I = p_S_I.sum(axis=1)
-    I_f1 = f2_I
+
     for i in range(2):
         for j in range(2):
             f1_G[0] += p_D[j] * p_I[i] * p_G_D_I[indexes[i][j]][0] * I_f1[i]
@@ -73,9 +75,22 @@ def marginal_g():
     prop_margin = f3_G_msg * f1_G
     return prop_margin / prop_margin.sum()
 
+def marginal_D():
+    G_f1 = f3_G_msg
+    f1_D[0] += p_D[0] * G_f1[0] * I_f1[0]
+    f1_D[1] += p_D[1] * G_f1[1] * I_f1[1]
+    return f1_D
+
+def marginal_I():
+    prop_margin = f1_I * f2_I
+    return prop_margin / prop_margin.sum()
+
 
 def main():
-    marginal_l()
+    print(marginal_s())
+    print(marginal_l())
     print(marginal_g())
+    print(marginal_D())
+    print(marginal_I())
 
 main()
