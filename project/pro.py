@@ -6,19 +6,21 @@ import torchvision
 from torchvision import datasets, transforms, models
 import math
 import torch.nn.functional as F
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 
 criterion_cross_entropy = nn.CrossEntropyLoss()
 criterion_mse = nn.MSELoss()
 mse_reduction_none = nn.MSELoss(reduction='none')
-batch = 64
+batch = 128
 device = 'cuda' if cuda.is_available() else 'cpu'
 
 transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Normalize((0.1307,), (0.3081)), ])
 
 transform_cifar = transforms.Compose(
-    [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Normalize((.5, ), (.5, ))])
+    [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Resize(28), transforms.Normalize((.5, ), (.5, ))])
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
@@ -35,15 +37,11 @@ validation_loader = utils.data.DataLoader(validation, batch_size=len(validation)
 test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
 
 testset_cifar = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform_cifar)
-testloader_cifar = torch.utils.data.DataLoader(testset_cifar, batch_size=4, shuffle=False)
+testloader_cifar = torch.utils.data.DataLoader(testset_cifar, batch_size=batch, shuffle=False)
 
 
+def generate_test():
 
-# to remove
-data_iter = iter(train_loader)
-images, labels = data_iter.next()
-print(images.shape)
-print(labels.shape)
 
 
 class Encoder(nn.Module):
@@ -76,7 +74,7 @@ class Decoder(nn.Module):
         self.classify_output = classify_output
         self.upsample2 = input_size - 4
         self.upsample1 = int(self.upsample2 / 2 - 4)
-        self.fc3_input = int(self.upsample1 / 2)
+        self.fc3_input = int(self.upsample1 / 2)   #TODO:change name
         self.t_fc1 = torch.nn.Linear(10, 84)
         self.t_fc2 = torch.nn.Linear(84, 120)
         self.t_fc3 = torch.nn.Linear(120, 16 * self.fc3_input * self.fc3_input)
@@ -107,13 +105,13 @@ class AutoEncoder(nn.Module):
         return self.decoder(encoded)
 
 
-def train_model(epochs, model, optimizer, ood_threshold):
+def train_model(data_loader, epochs, model, optimizer, ood_threshold):
     train_losses = []
     train_acc = []
     for epoch in range(epochs):  # loop over the dataset multiple times
 
         curr_loss = 0.0
-        for i, data in enumerate(train_loader, 0):
+        for i, data in enumerate(data_loader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
 
@@ -133,19 +131,17 @@ def train_model(epochs, model, optimizer, ood_threshold):
 
             curr_loss += loss.item()
 
-        # v_outputs, v_tags = model.forward_train(valid_data)
-        # valid_tags_loss = criterion_cross_entropy(v_tags.squeeze(), valid_labels)
-        # valid_outputs_loss = criterion_mse(v_outputs, valid_labels)
-        # valid_loss = (output_loss + tags_loss) / 2
+        print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, epochs, curr_loss / (math.floor(len(train) / batch))))
 
         train_losses.append(curr_loss / (math.floor(len(train) / batch)))
-        # validation_losses.append(valid_loss.item())
+        train_acc.append(accuracy(data_loader, model, ood_threshold))
 
-        train_acc.append(accuracy(train_loader, model, ood_threshold))
-        # valid_acc.append(accuracy(validation_loader, model))
     return train_losses, train_acc
-    # return train_losses, validation_losses, train_acc, valid_acc
 
+
+def reconstruct(model, data):
+    reconstruction, labels = model.forward(data.unsqueeze(1).to(device))
+    return reconstruction / 0.3081 + 0.1307, labels
 
 def map_OOD(v_norm, pred_label, threshold):
     return pred_label if v_norm < threshold else np.asarray([10])
@@ -167,9 +163,30 @@ def accuracy(data_loader, model, threshold):
 
     return correct_count / all_count * 100
 
+def plot_reconstruction(model, loader):
+    amount_img = 3
+    data_iter = iter(loader)
+    images, test_labels = data_iter.next()
+    images = images[:amount_img].squeeze()
+    reconstruction, labels = reconstruct(model, images)
+    reconstruction = reconstruction.detach().cpu().squeeze().numpy()
+
+    f, axs = plt.subplots(2, amount_img)
+
+    for i in range(amount_img):
+        axs[1, i].set_title(f"predicted label:{test_labels[i]}")
+        axs[0, i].imshow(images[i] / 0.3081 + 0.1307, cmap='gray')
+        axs[1, i].imshow(reconstruction[i], cmap='gray')
+
+    axs[0, 0].set_ylabel("original")
+    axs[1, 0].set_ylabel("reconstructed")
+    plt.suptitle("Origin vs Reconstructed images")
+    plt.show()
+
 
 model = AutoEncoder(28, 10).to(device)
 optimizer = optim.Adam(model.parameters(), lr=0.0001)
-train_model(2, model, optimizer, 5)
+train_model(train_loader, 50, model, optimizer, 5)
 torch.save(model.state_dict(), "./model")
+plot_reconstruction(model, train_loader)
 
