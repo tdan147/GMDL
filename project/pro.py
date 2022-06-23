@@ -7,6 +7,7 @@ from torchvision import datasets, transforms, models
 import math
 import torch.nn.functional as F
 
+
 criterion_cross_entropy = nn.CrossEntropyLoss()
 criterion_mse = nn.MSELoss()
 mse_reduction_none = nn.MSELoss(reduction='none')
@@ -15,6 +16,9 @@ device = 'cuda' if cuda.is_available() else 'cpu'
 
 transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Normalize((0.1307,), (0.3081)), ])
+
+transform_cifar = transforms.Compose(
+    [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Normalize((.5, ), (.5, ))])
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
@@ -30,6 +34,11 @@ train_loader = utils.data.DataLoader(train, batch_size=batch, shuffle=True)
 validation_loader = utils.data.DataLoader(validation, batch_size=len(validation), shuffle=True)
 test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
 
+testset_cifar = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform_cifar)
+testloader_cifar = torch.utils.data.DataLoader(testset_cifar, batch_size=4, shuffle=False)
+
+
+
 # to remove
 data_iter = iter(train_loader)
 images, labels = data_iter.next()
@@ -38,12 +47,14 @@ print(labels.shape)
 
 
 class Encoder(nn.Module):
-    def __init__(self):
+    def __init__(self, input_size):
         super(Encoder, self).__init__()
+        self.input_size = input_size
+        self.fc1_input = int(((self.input_size - 4) / 2 - 4) / 2)   #TODO:change name
         self.conv1 = torch.nn.Conv2d(1, 6, 5)  # in channels, out channels, kernel size
         self.pool = torch.nn.MaxPool2d(2, 2)  # size,stride
         self.conv2 = torch.nn.Conv2d(6, 16, 5)
-        self.fc1 = torch.nn.Linear(16 * 5 * 5, 120)
+        self.fc1 = torch.nn.Linear(16 * self.fc1_input * self.fc1_input, 120)
         self.fc2 = torch.nn.Linear(120, 84)
         self.fc3 = torch.nn.Linear(84, 10)
 
@@ -51,7 +62,7 @@ class Encoder(nn.Module):
         # two convolutional layers, a bunch of ff layers
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
+        x = x.view(-1, 16 * self.fc1_input * self.fc1_input)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
@@ -59,30 +70,37 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self):
+    def __init__(self, input_size, classify_output):
         super(Decoder, self).__init__()
+        self.input_size = input_size
+        self.classify_output = classify_output
+        self.upsample2 = input_size - 4
+        self.upsample1 = int(self.upsample2 / 2 - 4)
+        self.fc3_input = int(self.upsample1 / 2)
         self.t_fc1 = torch.nn.Linear(10, 84)
         self.t_fc2 = torch.nn.Linear(84, 120)
-        self.t_fc3 = torch.nn.Linear(120, 16 * 5 * 5)
-        self.t_conv1 = nn.ConvTranspose2d(16, 6, 4)
-        self.t_conv2 = nn.ConvTranspose2d(6, 1, 4)
-        self.classifier = torch.nn.Linear(1, 10)
+        self.t_fc3 = torch.nn.Linear(120, 16 * self.fc3_input * self.fc3_input)
+        self.t_conv1 = nn.ConvTranspose2d(16, 6, 5)
+        self.t_conv2 = nn.ConvTranspose2d(6, 1, 5)
+        self.classifier = torch.nn.Linear(input_size ** 2, classify_output)
 
     def forward(self, x):
         x = F.relu(self.t_fc1(x))
         x = F.relu(self.t_fc2(x))
         x = self.t_fc3(x)
-        x = x.view(16 * 5 * 5, -1)
+        x = x.view(-1, 16, self.fc3_input, self.fc3_input)
+        x = nn.Upsample((self.upsample1, self.upsample1))(x)
         x = F.relu(self.t_conv1(x))
+        x = nn.Upsample((self.upsample2, self.upsample2))(x)
         x = self.t_conv2(x)
-        return x, self.classifier(x)
+        return x, self.classifier(x.view(-1, self.input_size ** 2))
 
 
 class AutoEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, input_size, classify_output):
         super(AutoEncoder, self).__init__()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
+        self.encoder = Encoder(input_size)
+        self.decoder = Decoder(input_size, classify_output)
 
     def forward(self, x):
         encoded = self.encoder(x)
@@ -106,7 +124,7 @@ def train_model(epochs, model, optimizer, ood_threshold):
             optimizer.zero_grad()
 
             # forward + backward + optimize
-            outputs, tags = model.forward_train(inputs)
+            outputs, tags = model(inputs)
             output_loss = criterion_mse(outputs, inputs)
             tags_loss = criterion_cross_entropy(tags.squeeze(), labels)
             loss = (output_loss + tags_loss) / 2
@@ -136,18 +154,22 @@ def map_OOD(v_norm, pred_label, threshold):
 def accuracy(data_loader, model, threshold):
     correct_count, all_count = 0, 0
     for images, labels in data_loader:
-        labels = labels.to(device)
+        labels = labels.numpy()
         img = images.to(device)
         with torch.no_grad():
             reconstucted, tags = model(img)
 
-        norm = torch.norm(img - reconstucted, dim=2)
-        max, pred_labels = torch.max(tags.data, 1)
-        pred = np.asarray(list(map(map_OOD, norm.numpy(), labels.numpy(), np.ones(labels.shape[0])*threshold)))
-        correct_count += (pred_labels == labels).sum().item()
-        all_count += labels.size(0)
+        norm = torch.norm((img - reconstucted).view(img.shape[0], -1), dim=1)
+        _, pred_labels = torch.max(tags.data, 1)
+        pred = np.asarray(list(map(map_OOD, norm.detach().cpu().numpy(), pred_labels.detach().cpu().numpy(), np.ones(labels.shape[0])*threshold)))
+        correct_count += (pred == labels).sum().item()
+        all_count += labels.shape[0]
 
     return correct_count / all_count * 100
 
 
-model = AutoEncoder()
+model = AutoEncoder(28, 10).to(device)
+optimizer = optim.Adam(model.parameters(), lr=0.0001)
+train_model(2, model, optimizer, 5)
+torch.save(model.state_dict(), "./model")
+
