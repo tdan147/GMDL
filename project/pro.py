@@ -30,19 +30,19 @@ all_train = torchvision.datasets.MNIST(root='./root', train=True, download=True,
 train_size = int(0.8 * len(all_train))
 train, validation = utils.data.random_split(all_train, [train_size, len(all_train) - train_size])
 
-test = torchvision.datasets.MNIST(root='./root', train=False, download=True, transform=transform)
+testset_mnist = torchvision.datasets.MNIST(root='./root', train=False, download=True, transform=transform)
 
 train_loader = utils.data.DataLoader(train, batch_size=batch, shuffle=True)
 validation_loader = utils.data.DataLoader(validation, batch_size=len(validation), shuffle=True)
-test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
+# test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
 
 testset_cifar = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform_cifar)
-testloader_cifar = torch.utils.data.DataLoader(testset_cifar, batch_size=batch, shuffle=False)
 
+def generate_test(mnist, osr):
+    osr.targets = [10 for i in range(len(osr.targets))]
+    return torch.utils.data.DataLoader(torch.utils.data.ConcatDataset([mnist, osr]), batch_size=batch, shuffle=True)
 
-def generate_test():
-
-
+test = generate_test(testset_mnist, testset_cifar)
 
 class Encoder(nn.Module):
     def __init__(self, input_size):
