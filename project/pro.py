@@ -7,8 +7,9 @@ from torchvision import datasets, transforms, models
 import math
 import torch.nn.functional as F
 import ssl
-ssl._create_default_https_context = ssl._create_unverified_context
+from sklearn.metrics import confusion_matrix
 
+ssl._create_default_https_context = ssl._create_unverified_context
 
 criterion_cross_entropy = nn.CrossEntropyLoss()
 criterion_mse = nn.MSELoss()
@@ -19,8 +20,7 @@ device = 'cuda' if cuda.is_available() else 'cpu'
 transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Normalize((0.1307,), (0.3081)), ])
 
-transform_cifar = transforms.Compose(
-    [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Resize(28), transforms.Normalize((.5, ), (.5, ))])
+
 
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
@@ -36,25 +36,46 @@ train_loader = utils.data.DataLoader(train, batch_size=batch, shuffle=True)
 validation_loader = utils.data.DataLoader(validation, batch_size=len(validation), shuffle=True)
 # test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
 
-testset_cifar = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform_cifar)
+
+
+def create_dataset_osr(dataset):
+    transform_osr = transforms.Compose(
+        [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Resize(28)])
+    testset_osr = dataset(root="./data", train=False, download=True, transform=transform_osr)
+    testset_osr_data = testset_osr.data / 255
+    mean = testset_osr_data.mean()
+    std = testset_osr_data.std()
+
+    transform_osr = transforms.Compose(
+        [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Resize(28),
+         transforms.Normalize((mean,), (std))])
+    return dataset(root="./data", train=False, download=True, transform=transform_osr)
+
+dataset_cifar = create_dataset_osr(torchvision.datasets.CIFAR10)
+# dataset_kmnist = create_dataset_osr(torchvision.datasets.KMNIST)
+
+
 
 def generate_test(mnist, osr):
     osr.targets = [10 for i in range(len(osr.targets))]
     return torch.utils.data.DataLoader(torch.utils.data.ConcatDataset([mnist, osr]), batch_size=batch, shuffle=True)
 
-test = generate_test(testset_mnist, testset_cifar)
+
+test_loader_cifar = generate_test(testset_mnist, dataset_cifar)
+# test_loader_kmnist = generate_test(testset_mnist, dataset_kmnist)
+
 
 class Encoder(nn.Module):
     def __init__(self, input_size):
         super(Encoder, self).__init__()
         self.input_size = input_size
-        self.fc1_input = int(((self.input_size - 4) / 2 - 4) / 2)   #TODO:change name
+        self.fc1_input = int(((self.input_size - 4) / 2 - 4) / 2)  # TODO:change name
         self.conv1 = torch.nn.Conv2d(1, 6, 5)  # in channels, out channels, kernel size
         self.pool = torch.nn.MaxPool2d(2, 2)  # size,stride
         self.conv2 = torch.nn.Conv2d(6, 16, 5)
-        self.fc1 = torch.nn.Linear(16 * self.fc1_input * self.fc1_input, 120)
-        self.fc2 = torch.nn.Linear(120, 84)
-        self.fc3 = torch.nn.Linear(84, 10)
+        self.fc1 = torch.nn.Linear(16 * self.fc1_input * self.fc1_input, 300)
+        self.fc2 = torch.nn.Linear(300, 250)
+        self.fc3 = torch.nn.Linear(250, 150)
 
     def forward(self, x):
         # two convolutional layers, a bunch of ff layers
@@ -68,19 +89,19 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, input_size, classify_output):
+    def __init__(self, input_size, num_labels):
         super(Decoder, self).__init__()
         self.input_size = input_size
-        self.classify_output = classify_output
+        self.num_labels = num_labels
         self.upsample2 = input_size - 4
         self.upsample1 = int(self.upsample2 / 2 - 4)
-        self.fc3_input = int(self.upsample1 / 2)   #TODO:change name
-        self.t_fc1 = torch.nn.Linear(10, 84)
-        self.t_fc2 = torch.nn.Linear(84, 120)
-        self.t_fc3 = torch.nn.Linear(120, 16 * self.fc3_input * self.fc3_input)
+        self.fc3_input = int(self.upsample1 / 2)  # TODO:change name
+        self.t_fc1 = torch.nn.Linear(150, 250)
+        self.t_fc2 = torch.nn.Linear(250, 300)
+        self.t_fc3 = torch.nn.Linear(300, 16 * self.fc3_input * self.fc3_input)
         self.t_conv1 = nn.ConvTranspose2d(16, 6, 5)
         self.t_conv2 = nn.ConvTranspose2d(6, 1, 5)
-        self.classifier = torch.nn.Linear(input_size ** 2, classify_output)
+        self.classifier = torch.nn.Linear(input_size ** 2, num_labels)
 
     def forward(self, x):
         x = F.relu(self.t_fc1(x))
@@ -95,17 +116,17 @@ class Decoder(nn.Module):
 
 
 class AutoEncoder(nn.Module):
-    def __init__(self, input_size, classify_output):
+    def __init__(self, input_size, num_labels):
         super(AutoEncoder, self).__init__()
         self.encoder = Encoder(input_size)
-        self.decoder = Decoder(input_size, classify_output)
+        self.decoder = Decoder(input_size, num_labels)
 
     def forward(self, x):
         encoded = self.encoder(x)
         return self.decoder(encoded)
 
 
-def train_model(data_loader, epochs, model, optimizer, ood_threshold):
+def train_model(data_loader, epochs, model, optimizer, ood_threshold, num_labels):
     train_losses = []
     train_acc = []
     for epoch in range(epochs):  # loop over the dataset multiple times
@@ -134,34 +155,40 @@ def train_model(data_loader, epochs, model, optimizer, ood_threshold):
         print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, epochs, curr_loss / (math.floor(len(train) / batch))))
 
         train_losses.append(curr_loss / (math.floor(len(train) / batch)))
-        train_acc.append(accuracy(data_loader, model, ood_threshold))
+        train_acc.append(accuracy(data_loader, model, ood_threshold, num_labels)[0])
 
     return train_losses, train_acc
 
 
 def reconstruct(model, data):
     reconstruction, labels = model.forward(data.unsqueeze(1).to(device))
-    return reconstruction / 0.3081 + 0.1307, labels
+    return reconstruction, labels
+
 
 def map_OOD(v_norm, pred_label, threshold):
-    return pred_label if v_norm < threshold else np.asarray([10])
+    return pred_label if v_norm < threshold else 10
 
 
-def accuracy(data_loader, model, threshold):
+def accuracy(data_loader, model, threshold, num_labels):
+    creterion = torch.nn.MSELoss(reduction='none')
     correct_count, all_count = 0, 0
+    confusion = np.zeros((num_labels, num_labels))
     for images, labels in data_loader:
         labels = labels.numpy()
         img = images.to(device)
         with torch.no_grad():
             reconstucted, tags = model(img)
 
-        norm = torch.norm((img - reconstucted).view(img.shape[0], -1), dim=1)
+        norm = torch.mean(creterion(reconstucted, img).squeeze(), dim=(1, 2))
         _, pred_labels = torch.max(tags.data, 1)
-        pred = np.asarray(list(map(map_OOD, norm.detach().cpu().numpy(), pred_labels.detach().cpu().numpy(), np.ones(labels.shape[0])*threshold)))
+        pred = np.asarray(list(map(map_OOD, norm.detach().cpu().numpy(), pred_labels.detach().cpu().numpy(),
+                                   np.ones(labels.shape[0]) * threshold)))
         correct_count += (pred == labels).sum().item()
         all_count += labels.shape[0]
+        confusion += confusion_matrix(labels, pred, labels=range(num_labels))
 
-    return correct_count / all_count * 100
+    return correct_count / all_count * 100, confusion
+
 
 def plot_reconstruction(model, loader):
     amount_img = 3
@@ -174,8 +201,8 @@ def plot_reconstruction(model, loader):
     f, axs = plt.subplots(2, amount_img)
 
     for i in range(amount_img):
-        axs[1, i].set_title(f"predicted label:{test_labels[i]}")
-        axs[0, i].imshow(images[i] / 0.3081 + 0.1307, cmap='gray')
+        axs[1, i].set_title(f"predicted label:{labels[i]}")
+        axs[0, i].imshow(images[i], cmap='gray')
         axs[1, i].imshow(reconstruction[i], cmap='gray')
 
     axs[0, 0].set_ylabel("original")
@@ -184,9 +211,26 @@ def plot_reconstruction(model, loader):
     plt.show()
 
 
-model = AutoEncoder(28, 10).to(device)
-optimizer = optim.Adam(model.parameters(), lr=0.0001)
-train_model(train_loader, 50, model, optimizer, 5)
-torch.save(model.state_dict(), "./model")
-plot_reconstruction(model, train_loader)
+def train_new_model(loader, input_size, num_labels, threshold_ood, epoch):
+    model = AutoEncoder(input_size, num_labels).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)
+    train_model(loader, epoch, model, optimizer, threshold_ood, num_labels)
+    torch.save(model.state_dict(), "./model_10")
+    # plot_reconstruction(model, loader)
 
+
+def load_assess_model(loader, input_size, num_labels, threshold_ood):
+    model = AutoEncoder(input_size, num_labels).to(device)
+    model.load_state_dict(torch.load("./model_10"))
+    model.eval()
+    # plot_reconstruction(model, loader)
+    np.set_printoptions(suppress=True)
+    acc, confusion = accuracy(loader, model, threshold_ood, num_labels + 1)
+    print(f'Accuracy: {acc}')
+    print(f'Confusion Matrix: {confusion}')
+
+
+threshold_ood = 0.4
+# train_new_model(train_loader, 28, 10, threshold_ood, epoch=15)
+load_assess_model(test_loader_cifar, 28, 10, threshold_ood)
+# load_assess_model(test_loader_kmnist, 28, 10, threshold_ood)
