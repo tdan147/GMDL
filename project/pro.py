@@ -20,8 +20,6 @@ device = 'cuda' if cuda.is_available() else 'cpu'
 transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Normalize((0.1307,), (0.3081)), ])
 
-
-
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 torch.manual_seed(1)
@@ -34,8 +32,9 @@ testset_mnist = torchvision.datasets.MNIST(root='./root', train=False, download=
 
 train_loader = utils.data.DataLoader(train, batch_size=batch, shuffle=True)
 validation_loader = utils.data.DataLoader(validation, batch_size=len(validation), shuffle=True)
-# test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
 
+
+# test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
 
 
 def create_dataset_osr(dataset):
@@ -51,9 +50,11 @@ def create_dataset_osr(dataset):
          transforms.Normalize((mean,), (std))])
     return dataset(root="./data", train=False, download=True, transform=transform_osr)
 
-dataset_cifar = create_dataset_osr(torchvision.datasets.CIFAR10)
-# dataset_kmnist = create_dataset_osr(torchvision.datasets.KMNIST)
 
+dataset_cifar = create_dataset_osr(torchvision.datasets.CIFAR10)
+
+
+# dataset_kmnist = create_dataset_osr(torchvision.datasets.KMNIST)
 
 
 def generate_test(mnist, osr):
@@ -62,6 +63,8 @@ def generate_test(mnist, osr):
 
 
 test_loader_cifar = generate_test(testset_mnist, dataset_cifar)
+
+
 # test_loader_kmnist = generate_test(testset_mnist, dataset_kmnist)
 
 
@@ -168,20 +171,31 @@ def reconstruct(model, data):
 def map_OOD(v_norm, pred_label, threshold):
     return pred_label if v_norm < threshold else 10
 
+def cnn(x, model):
+    x = model.encoder.conv1(x)
+    return x
+
+def get_style_loss(img, reconstructed, model):
+    channel = 6
+    conv_img = cnn(img, model).flatten(2, 3)
+    conv_reco = cnn(reconstructed, model).flatten(2, 3)
+    gram_img = torch.matmul(conv_img, torch.transpose(conv_img, 1, 2))
+    gram_reco = torch.matmul(conv_reco, torch.transpose(conv_reco, 1, 2))
+    return torch.sum(((gram_img - gram_reco)**2), (1, 2)) / (channel ** 2)
+
 
 def accuracy(data_loader, model, threshold, num_labels):
-    creterion = torch.nn.MSELoss(reduction='none')
     correct_count, all_count = 0, 0
     confusion = np.zeros((num_labels, num_labels))
     for images, labels in data_loader:
         labels = labels.numpy()
         img = images.to(device)
         with torch.no_grad():
-            reconstucted, tags = model(img)
+            reconstructed, tags = model(img)
 
-        norm = torch.mean(creterion(reconstucted, img).squeeze(), dim=(1, 2))
+        style_loss = get_style_loss(img, reconstructed, model)
         _, pred_labels = torch.max(tags.data, 1)
-        pred = np.asarray(list(map(map_OOD, norm.detach().cpu().numpy(), pred_labels.detach().cpu().numpy(),
+        pred = np.asarray(list(map(map_OOD, style_loss.detach().cpu().numpy(), pred_labels.detach().cpu().numpy(),
                                    np.ones(labels.shape[0]) * threshold)))
         correct_count += (pred == labels).sum().item()
         all_count += labels.shape[0]
@@ -215,13 +229,13 @@ def train_new_model(loader, input_size, num_labels, threshold_ood, epoch):
     model = AutoEncoder(input_size, num_labels).to(device)
     optimizer = optim.Adam(model.parameters(), lr=0.0001)
     train_model(loader, epoch, model, optimizer, threshold_ood, num_labels)
-    torch.save(model.state_dict(), "./model_10")
+    torch.save(model.state_dict(), "./model_epoch100")
     # plot_reconstruction(model, loader)
 
 
 def load_assess_model(loader, input_size, num_labels, threshold_ood):
     model = AutoEncoder(input_size, num_labels).to(device)
-    model.load_state_dict(torch.load("./model_10"))
+    model.load_state_dict(torch.load("./model_epoch100"))
     model.eval()
     # plot_reconstruction(model, loader)
     np.set_printoptions(suppress=True)
@@ -230,7 +244,7 @@ def load_assess_model(loader, input_size, num_labels, threshold_ood):
     print(f'Confusion Matrix: {confusion}')
 
 
-threshold_ood = 0.4
-# train_new_model(train_loader, 28, 10, threshold_ood, epoch=15)
+threshold_ood = 20000
+# train_new_model(train_loader, 28, 10, threshold_ood, epoch=100)
 load_assess_model(test_loader_cifar, 28, 10, threshold_ood)
 # load_assess_model(test_loader_kmnist, 28, 10, threshold_ood)
