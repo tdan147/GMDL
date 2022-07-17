@@ -56,27 +56,31 @@ def set_seed(seed):
     np.random.seed(seed)
 
 
-def get_data():
+def get_data(is_normalize):
     set_seed(1)
     currDir = f"{os.getcwd()}/Mnist"
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081))])
+
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081))]) if is_normalize else transforms.Compose([transforms.ToTensor()])
     train_data = torchvision.datasets.MNIST(root=f'{currDir}/data', train=True, download=True, transform=transform)
-
-
     indices = np.random.permutation(len(train_data))
     train_subset = Subset(train_data, indices=indices[0:10000])
     return train_subset
 
 
 def get_pca_data():
-    train = get_data()
+    train = get_data(False)
     train_size = 10000
     train_loader = torch.utils.data.DataLoader(train, batch_size=train_size, shuffle=False)
     train_iter = iter(train_loader)
     images, labels = train_iter.next()
-    return images.view(train_size, 784).numpy().T, labels.numpy()
+    return images.view(train_size, 784).numpy(), labels.numpy()
 
+def load_data(path):
+    data = pd.read_csv(path)
+    outputs = data['label']
+    inputs = data.drop(['label'], axis=1)
+    return inputs, outputs
 
 def get_autoencoder_data():
-    train = get_data()
+    train = get_data(True)
     return torch.utils.data.DataLoader(train, batch_size=32, shuffle=False)
