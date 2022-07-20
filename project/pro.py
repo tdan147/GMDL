@@ -33,11 +33,10 @@ testset_mnist = torchvision.datasets.MNIST(root='./root', train=False, download=
 train_loader = utils.data.DataLoader(train, batch_size=batch, shuffle=True)
 validation_loader = utils.data.DataLoader(validation, batch_size=len(validation), shuffle=True)
 
+test_loader = utils.data.DataLoader(testset_mnist, batch_size=batch, shuffle=False)
 
-# test_loader = utils.data.DataLoader(test, batch_size=batch, shuffle=False)
 
-
-def create_dataset_osr(dataset):
+def create_dataset_osr(dataset, is_grey):
     transform_osr = transforms.Compose(
         [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Resize(28)])
     testset_osr = dataset(root="./data", train=False, download=True, transform=transform_osr)
@@ -46,15 +45,16 @@ def create_dataset_osr(dataset):
     std = testset_osr_data.std()
 
     transform_osr = transforms.Compose(
+        [transforms.ToTensor(), transforms.Resize(28),
+         transforms.Normalize((mean,), (std))]) if is_grey else transforms.Compose(
         [transforms.ToTensor(), transforms.Grayscale(num_output_channels=1), transforms.Resize(28),
          transforms.Normalize((mean,), (std))])
     return dataset(root="./data", train=False, download=True, transform=transform_osr)
 
 
-dataset_cifar = create_dataset_osr(torchvision.datasets.CIFAR10)
+dataset_cifar = create_dataset_osr(torchvision.datasets.CIFAR10, 0)
 
-
-# dataset_kmnist = create_dataset_osr(torchvision.datasets.KMNIST)
+dataset_kmnist = create_dataset_osr(torchvision.datasets.KMNIST, 1)
 
 
 def generate_test(mnist, osr):
@@ -64,8 +64,7 @@ def generate_test(mnist, osr):
 
 test_loader_cifar = generate_test(testset_mnist, dataset_cifar)
 
-
-# test_loader_kmnist = generate_test(testset_mnist, dataset_kmnist)
+test_loader_kmnist = generate_test(testset_mnist, dataset_kmnist)
 
 
 class Encoder(nn.Module):
@@ -129,13 +128,16 @@ class AutoEncoder(nn.Module):
         return self.decoder(encoded)
 
 
-def train_model(data_loader, epochs, model, optimizer, ood_threshold, num_labels):
+def train_model(train_loader, validation_loader, epochs, model, optimizer, num_labels):
     train_losses = []
+    validation_losses = []
     train_acc = []
+    validation_acc = []
     for epoch in range(epochs):  # loop over the dataset multiple times
 
         curr_loss = 0.0
-        for i, data in enumerate(data_loader, 0):
+        curr_val_loss = 0.0
+        for i, data in enumerate(train_loader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
 
@@ -155,12 +157,32 @@ def train_model(data_loader, epochs, model, optimizer, ood_threshold, num_labels
 
             curr_loss += loss.item()
 
-        print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, epochs, curr_loss / (math.floor(len(train) / batch))))
+        for i, data in enumerate(validation_loader, 0):
+            # get the inputs; data is a list of [inputs, labels]
+            inputs, labels = data
+
+            # mode to device/cuda
+            inputs, labels = inputs.to(device), labels.to(device)
+
+            # forward + optimize
+            outputs, tags = model(inputs)
+            output_loss = criterion_mse(outputs, inputs)
+            tags_loss = criterion_cross_entropy(tags.squeeze(), labels)
+            loss = (output_loss + tags_loss) / 2
+
+            curr_val_loss += loss.item()
+
+        print(
+            'epoch [{}/{}], train loss:{:.4f}'.format(epoch + 1, epochs, curr_loss / (math.floor(len(train) / batch))))
+        print('epoch [{}/{}], validation loss:{:.4f}'.format(epoch + 1, epochs,
+                                                             curr_val_loss / (math.floor(len(validation) / batch))))
 
         train_losses.append(curr_loss / (math.floor(len(train) / batch)))
-        train_acc.append(accuracy(data_loader, model, ood_threshold, num_labels)[0])
+        validation_losses.append(curr_val_loss / (math.floor(len(validation) / batch)))
+        train_acc.append(accuracy_mnist(train_loader, model, num_labels)[0])
+        validation_acc.append(accuracy_mnist(validation_loader, model, num_labels)[0])
 
-    return train_losses, train_acc
+    return train_losses, validation_losses, train_acc, validation_acc
 
 
 def reconstruct(model, data):
@@ -171,20 +193,37 @@ def reconstruct(model, data):
 def map_OOD(v_norm, pred_label, threshold):
     return pred_label if v_norm < threshold else 10
 
-def cnn(x, model):
-    x = model.encoder.conv1(x)
-    return x
+
+def map_binary(v_norm, threshold):
+    return 0 if v_norm < threshold else 1
+
+
+def extract_features(x, model):
+    return model.encoder.conv1(x)
+
+
+def calc_threshold(data_loader, percentile, model):
+    style_loss = []
+    for images, _ in data_loader:
+        img = images.to(device)
+        with torch.no_grad():
+            reconstructed, tags = model(img)
+
+        style_loss.append(get_style_loss(img, reconstructed, model).detach().cpu().numpy())
+    style_loss = np.concatenate(style_loss)
+    return np.percentile(style_loss, percentile)
+
 
 def get_style_loss(img, reconstructed, model):
     channel = 6
-    conv_img = cnn(img, model).flatten(2, 3)
-    conv_reco = cnn(reconstructed, model).flatten(2, 3)
+    conv_img = extract_features(img, model).flatten(2, 3)
+    conv_reco = extract_features(reconstructed, model).flatten(2, 3)
     gram_img = torch.matmul(conv_img, torch.transpose(conv_img, 1, 2))
     gram_reco = torch.matmul(conv_reco, torch.transpose(conv_reco, 1, 2))
-    return torch.sum(((gram_img - gram_reco)**2), (1, 2)) / (channel ** 2)
+    return torch.sum(((gram_img - gram_reco) ** 2), (1, 2)) / (channel ** 2)
 
 
-def accuracy(data_loader, model, threshold, num_labels):
+def accuracy_OOD(data_loader, model, threshold, num_labels):
     correct_count, all_count = 0, 0
     confusion = np.zeros((num_labels, num_labels))
     for images, labels in data_loader:
@@ -197,6 +236,44 @@ def accuracy(data_loader, model, threshold, num_labels):
         _, pred_labels = torch.max(tags.data, 1)
         pred = np.asarray(list(map(map_OOD, style_loss.detach().cpu().numpy(), pred_labels.detach().cpu().numpy(),
                                    np.ones(labels.shape[0]) * threshold)))
+        correct_count += (pred == labels).sum().item()
+        all_count += labels.shape[0]
+        confusion += confusion_matrix(labels, pred, labels=range(num_labels))
+
+    return correct_count / all_count * 100, confusion
+
+
+def accuracy_mnist(data_loader, model, num_labels):
+    correct_count, all_count = 0, 0
+    confusion = np.zeros((num_labels, num_labels))
+    for images, labels in data_loader:
+        labels = labels.numpy()
+        img = images.to(device)
+        with torch.no_grad():
+            _, tags = model(img)
+
+        _, pred_labels = torch.max(tags.data, 1)
+        pred_labels = pred_labels.detach().cpu().numpy()
+        correct_count += (pred_labels == labels).sum().item()
+        all_count += labels.shape[0]
+        confusion += confusion_matrix(labels, pred_labels, labels=range(num_labels))
+
+    return correct_count / all_count * 100, confusion
+
+
+def accuracy_binary(data_loader, model, threshold, num_labels):
+    correct_count, all_count = 0, 0
+    confusion = np.zeros((num_labels, num_labels))
+    for images, labels in data_loader:
+        labels = np.asarray(list(map(lambda label: 0 if label < 10 else 1, labels.numpy())))
+        img = images.to(device)
+        with torch.no_grad():
+            reconstructed, tags = model(img)
+
+        style_loss = get_style_loss(img, reconstructed, model)
+        _, pred_labels = torch.max(tags.data, 1)
+        pred = np.asarray(
+            list(map(map_binary, style_loss.detach().cpu().numpy(), np.ones(labels.shape[0]) * threshold)))
         correct_count += (pred == labels).sum().item()
         all_count += labels.shape[0]
         confusion += confusion_matrix(labels, pred, labels=range(num_labels))
@@ -225,26 +302,51 @@ def plot_reconstruction(model, loader):
     plt.show()
 
 
-def train_new_model(loader, input_size, num_labels, threshold_ood, epoch):
+def plot(train, valid, title, ylabel):
+    plt.figure()
+    plt.title(f'{title}')
+    plt.plot(np.arange(len(train)), train, label='train')
+    plt.plot(np.arange(len(valid)), valid, label='validation')
+    plt.xlabel("Epoch")
+    plt.ylabel(ylabel)
+    plt.legend()
+    plt.show()
+
+
+def train_new_model(train_loader, validation_loader, input_size, num_labels, model_name, epoch):
     model = AutoEncoder(input_size, num_labels).to(device)
     optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    train_model(loader, epoch, model, optimizer, threshold_ood, num_labels)
-    torch.save(model.state_dict(), "./model_epoch100")
+    train_losses, validation_losses, train_MNIST_acc, validation_MNIST_acc = train_model(train_loader,
+                                                                                                    validation_loader,
+                                                                                                    epoch, model,
+                                                                                                    optimizer,
+                                                                                                    num_labels)
+
+    torch.save(model.state_dict(), model_name)
+    plot(train_losses, validation_losses, "Train & Validation Loss", "loss")
+    plot(train_MNIST_acc, validation_MNIST_acc, "MNIST Accuracy", "accuracy")
     # plot_reconstruction(model, loader)
 
 
-def load_assess_model(loader, input_size, num_labels, threshold_ood):
+def load_assess_model(train_loader, test_loader_mnist, test_loader, input_size, num_labels, percentile):
     model = AutoEncoder(input_size, num_labels).to(device)
     model.load_state_dict(torch.load("./model_epoch100"))
     model.eval()
     # plot_reconstruction(model, loader)
     np.set_printoptions(suppress=True)
-    acc, confusion = accuracy(loader, model, threshold_ood, num_labels + 1)
-    print(f'Accuracy: {acc}')
-    print(f'Confusion Matrix: {confusion}')
+    threshold_ood = calc_threshold(train_loader, percentile, model)
+    acc_mnist, confusion_mnist = accuracy_mnist(test_loader_mnist, model, num_labels)
+    acc_binary, confusion_binary = accuracy_binary(test_loader, model, threshold_ood, 2)
+    acc_OOD, confusion_OOD = accuracy_OOD(test_loader, model, threshold_ood, num_labels + 1)
+    print(f'MNIST Accuracy: {acc_mnist}')
+    print(f'MNIST Confusion Matrix:\n {confusion_mnist}')
+    print(f'Binary Accuracy: {acc_binary}')
+    print(f'Binary Confusion Matrix:\n {confusion_binary}')
+    print(f'OOD Accuracy: {acc_OOD}')
+    print(f'OOD Confusion Matrix:\n {confusion_OOD}')
 
 
-threshold_ood = 20000
-# train_new_model(train_loader, 28, 10, threshold_ood, epoch=100)
-load_assess_model(test_loader_cifar, 28, 10, threshold_ood)
-# load_assess_model(test_loader_kmnist, 28, 10, threshold_ood)
+model_name = "./model_epoch5"
+train_new_model(train_loader, validation_loader, 28, 10, model_name, epoch=5)
+# load_assess_model(train_loader, test_loader, test_loader_cifar, 28, 10, percentile=98)
+# load_assess_model(train_loader, test_loader, test_loader_kmnist, 28, 10, percentile=98)

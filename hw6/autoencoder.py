@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 from sklearn.preprocessing import StandardScaler
-import utils
+import hw6.utils as utils
 import torch.nn.functional as F
 
 
@@ -61,7 +61,7 @@ class linear_autoencoder(nn.Module):
 
 def main():
     train_loader = utils.get_autoencoder_data()
-    ae = linear_autoencoder(784, [256, 128, 32, 2])
+    ae = autoencoder(784, [256, 128, 32, 2])
     optimizer = torch.optim.Adam(ae.parameters(), lr=0.001)
     criterion = torch.nn.MSELoss()
     utils.train(30, train_loader, ae, criterion, optimizer)
